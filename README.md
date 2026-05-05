@@ -2,15 +2,19 @@
 
 A streaming quality scoring engine that rates movies as **WORTH**, **DECENT**, or **FILLER** by combining critic, audience, and pedigree signals into a single composite score. This repository is a portfolio project exploring how the messy, multi-source signal landscape that drives "should I watch this tonight?" decisions can be reduced to a defensible, reproducible score — and where each signal source's blind spots show up.
 
-## Phase 1 scope
+## Current scope (v0.2 — Phase 2.1 shipped)
 
-This phase is the MVP. It pulls 50 seed titles from the **OMDb API**, computes a v0.1 composite score using only Metacritic + IMDb data, classifies each title into a tier, and writes a sorted CSV.
+The pipeline pulls 50 seed titles from the **OMDb API** and **Letterboxd**, computes a v0.2 composite score blending Metacritic + Letterboxd, classifies each title into a tier, and writes a sorted CSV.
+
+**Shipped so far:**
+- **Phase 1** — OMDb integration, v0.1 formula (Metacritic + IMDb), CSV pipeline, pytest suite.
+- **Phase 2.1** — Letterboxd ratings via the public film page (year-disambiguated slug lookup, disk-cached HTML, multi-strategy parser), v0.2 formula.
 
 **What's NOT included yet:**
-- Letterboxd audience signals (Phase 2)
-- Trade publication coverage (Phase 2)
-- Pedigree features (director/cast track-record weighting, Phase 2)
-- Persistent database — Phase 1 is CSV in / CSV out
+- SQLite migration (Phase 2.2)
+- Pedigree features — director/cast track records (Phase 2.3)
+- Trade publication coverage — THR / Variety / IndieWire (Phase 2.4)
+- Full canonical formula MC 35% / LB 30% / Pedigree 20% / Trades 15% (Phase 2.5)
 - Ground-truth labeling and threshold/weight optimization (Phase 3)
 - Streamlit dashboard and case study writeup (Phase 4)
 
@@ -45,67 +49,74 @@ Get a free OMDb API key at <https://www.omdbapi.com/apikey.aspx>.
 pytest
 ```
 
-## Scoring formula (v0.1)
+## Scoring formula (v0.2)
 
-> **v0.1 is a placeholder.** It only uses signals that OMDb exposes. Phase 2 replaces it with the full WYN formula (Metacritic 35% + Letterboxd 30% + Pedigree 20% + Trades 15%).
+> v0.2 is a step toward the canonical WYN formula (Metacritic 35% + Letterboxd 30% + Pedigree 20% + Trades 15%). The 35% allocated to the missing Pedigree and Trades signals is redistributed proportionally onto Metacritic and Letterboxd until those signals come online.
 
 | Signal | Source | Normalization | Weight |
 |---|---|---|---|
-| Metacritic | OMDb `Ratings[]` | already 0–100 | **45%** |
-| IMDb rating | OMDb `imdbRating` | × 10 → 0–100 | **40%** |
-| IMDb vote count | OMDb `imdbVotes` | `min(100, log10(max(votes, 1)) * 20)` | **15%** |
+| Metacritic | OMDb `Ratings[]` | already 0–100 | **55%** |
+| Letterboxd | `letterboxd.com/film/<slug>/` (scraped) | × 20 → 0–100 | **45%** |
 
 **Tiers:**
 - score ≥ 70 → **WORTH**
 - 50 ≤ score < 70 → **DECENT**
 - score < 50 → **FILLER**
-- Missing Metacritic or IMDb rating → **UNSCORED** (no guessing)
+- Missing Metacritic or Letterboxd → **UNSCORED** (no guessing)
 
-### Known limitations of v0.1
+> v0.1 (`compute_score_v01` in [src/score.py](src/score.py)) is kept as the historical baseline for regression and comparison. It uses only OMDb signals (Metacritic 45% + IMDb rating 40% + IMDb votes 15%).
 
-- **No audience signal.** Without Letterboxd, the only audience proxy is IMDb, which skews toward genre/franchise enthusiasm rather than considered taste. Crowd-pleasers will be over-rewarded; arthouse films under-rewarded.
-- **IMDb-as-proxy.** Treating IMDb as a 40% signal is too heavy — it duplicates dimensions that should ideally come from Letterboxd. Phase 2 cuts this weight.
-- **Vote count rewards age.** Older films accumulate more votes; recent releases will look thinner on the votes axis even if they're great.
-- **Single critic source.** Metacritic alone misses trade-publication signal (THR / Variety / IndieWire), which Phase 2 adds.
-- **Tier cutoffs are unvalidated.** 70/50 are intuition, not optimization. Phase 3 fits these against a labeled set.
-- **OMDb's Metacritic coverage is incomplete for older catalog films.** — Schindler's List (1993) returned no Metacritic value in our 50-title test set.
-- **In our 50-title test set, the v0.1 formula classified 37/50 (74%) as WORTH** — calibration is too lenient for mid-tier mainstream films, which the IMDb rating + vote-count terms over-reward. Tier cutoffs and weights are explicitly out of scope for Phase 1; Phase 3 will fit them against ground-truth labels.
+### Known limitations of v0.2
+
+- **The audience signal didn't fix the calibration drift.** Adding Letterboxd reshuffled the top of the leaderboard but the overall distribution barely moved (38 / 1 / 10 / 1 in the 50-title test set, vs. 37 / 1 / 10 / 2 in v0.1). Letterboxd users love mid-tier mainstream films about as much as critics do, so a critic+audience blend doesn't discriminate them from prestige films. The real fix is Phase 3 calibration plus the Pedigree and Trades signals from Phases 2.3 and 2.4.
+- **Tier cutoffs are unvalidated.** 70 / 50 are intuition, not optimization. Phase 3 fits these against a labeled set.
+- **Single critic source.** Metacritic alone misses trade-publication signal (THR / Variety / IndieWire), which Phase 2.4 adds.
+- **OMDb's Metacritic coverage is incomplete for older catalog films.** Schindler's List (1993) returned no Metacritic value, leaving it UNSCORED in the 50-title test set.
+- **Letterboxd has no public ratings API on the free tier.** The scraper hits public film pages with respectful throttling (1 req/sec) and disk-caches responses. The parser tries JSON-LD `aggregateRating` first and falls back to `twitter:data2` — multiple strategies reduce but don't eliminate fragility to template changes.
+- **Slug-disambiguation pitfall.** Letterboxd's bare `/film/<slug>/` URL often points to an *older* film sharing the title rather than 404'ing (e.g. `/film/parasite/` → 1982 horror film, not Bong Joon-ho's 2019 film). The fetcher tries `/film/<slug>-<year>/` *first* and only falls back to the bare slug, so silent wrong-film matches are now blocked at the source.
 
 
 
 ## Sample output (top 10)
 
-From a 50-title run on 2026-05-05.
+From a 50-title v0.2 run on 2026-05-05.
 
 | Rank | Title | Year | Score | Tier |
 |---|---|---|---|---|
-| 1 | The Godfather | 1972 | 96.80 | WORTH |
-| 2 | Pulp Fiction | 1994 | 92.95 | WORTH |
-| 3 | Parasite | 2019 | 92.65 | WORTH |
-| 4 | The Lord of the Rings: The Fellowship of the Ring | 2001 | 92.00 | WORTH |
-| 5 | Goodfellas | 1990 | 91.20 | WORTH |
-| 6 | The Dark Knight | 2008 | 89.65 | WORTH |
-| 7 | There Will Be Blood | 2007 | 89.65 | WORTH |
-| 8 | La La Land | 2016 | 89.30 | WORTH |
-| 9 | No Country for Old Men | 2007 | 89.20 | WORTH |
-| 10 | Moonlight | 2016 | 89.15 | WORTH |
+| 1 | The Godfather | 1972 | 95.68 | WORTH |
+| 2 | Parasite | 2019 | 94.12 | WORTH |
+| 3 | Moonlight | 2016 | 92.25 | WORTH |
+| 4 | There Will Be Blood | 2007 | 91.29 | WORTH |
+| 5 | Goodfellas | 1990 | 90.74 | WORTH |
+| 6 | Pulp Fiction | 1994 | 90.41 | WORTH |
+| 7 | The Lord of the Rings: The Fellowship of the Ring | 2001 | 90.11 | WORTH |
+| 8 | No Country for Old Men | 2007 | 89.39 | WORTH |
+| 9 | La La Land | 2016 | 88.78 | WORTH |
+| 10 | Whiplash | 2014 | 88.73 | WORTH |
 
-Full tier distribution: **37 WORTH / 1 DECENT / 10 FILLER / 2 UNSCORED.**
+Full tier distribution: **38 WORTH / 1 DECENT / 10 FILLER / 1 UNSCORED.**
+
+For comparison, v0.1 (OMDb-only) on the same 50 titles: **37 WORTH / 1 DECENT / 10 FILLER / 2 UNSCORED** — almost identical shape, which is the central finding driving Phase 2.3+ and Phase 3.
 
 ## Project structure
 
 ```
 worth-your-night/
 ├── data/
-│   └── titles.csv          # 50 seed titles (title, year)
+│   └── titles.csv             # 50 seed titles (title, year)
 ├── src/
-│   ├── fetch.py            # OMDb API client
-│   ├── score.py            # v0.1 scoring logic
-│   └── main.py             # orchestrator
+│   ├── fetch.py               # OMDb API client
+│   ├── letterboxd.py          # Letterboxd scraper + slug fallback + cache
+│   ├── score.py               # v0.1 + v0.2 scoring logic
+│   └── main.py                # orchestrator
 ├── output/
-│   └── wyn_scores.csv      # generated by main.py
+│   └── wyn_scores.csv         # generated by main.py (gitignored)
+├── cache/
+│   └── letterboxd/            # disk cache of Letterboxd HTML (gitignored)
 ├── tests/
-│   └── test_score.py       # unit tests for scoring
+│   ├── test_letterboxd.py     # slug derivation + rating-parser fixtures
+│   └── test_score.py          # unit tests for v0.1 and v0.2
+├── conftest.py
 ├── .env.example
 ├── requirements.txt
 └── README.md
@@ -113,6 +124,10 @@ worth-your-night/
 
 ## Roadmap
 
-- **Phase 2 — Multi-source signal.** Add Letterboxd scraping, trade-publication coverage, and pedigree features. Move from CSV → a SQLite (or Postgres) store. Implement the full Metacritic 35% / Letterboxd 30% / Pedigree 20% / Trades 15% formula.
-- **Phase 3 — Ground-truth labeling and optimization.** Hand-label a subset of titles, then fit weights and tier cutoffs against the labels. Report MAE / accuracy vs. the v0.1 baseline.
-- **Phase 4 — Dashboard and case study.** Streamlit dashboard for browsing scored titles, filtering by tier/genre/decade, and inspecting per-title signal breakdowns. Case study writeup of methodology and findings for the portfolio.
+- **Phase 2.1 — Letterboxd integration.** _Shipped._ Public film-page scraping with year-disambiguated slug lookup, disk-cached HTML, multi-strategy parser (JSON-LD → twitter:data2 → data-average-rating). v0.2 formula blends Metacritic + Letterboxd.
+- **Phase 2.2 — SQLite migration.** Replace CSV in / CSV out with a relational store (separate tables per signal source, joined into a final scores table). No new signals; pure refactor to make later phases clean.
+- **Phase 2.3 — Pedigree feature.** Director and lead-cast track records (e.g. average Metacritic of their last 5 films, via OMDb). The new signal that v0.2's findings most need.
+- **Phase 2.4 — Trade publication coverage.** THR / Variety / IndieWire — likely a binary "did they review it?" signal as a prestige proxy, since scraping full review scores at scale is brittle.
+- **Phase 2.5 — Full canonical formula + recalibration.** Blend Metacritic 35% / Letterboxd 30% / Pedigree 20% / Trades 15%. Re-evaluate tier cutoffs against the test set.
+- **Phase 3 — Ground-truth labeling and optimization.** Hand-label a subset of titles, then fit weights and tier cutoffs against the labels. Report MAE / accuracy vs. the v0.1 and v0.2 baselines.
+- **Phase 4 — Dashboard and case study.** Streamlit dashboard for browsing scored titles, filtering by tier / genre / decade, and inspecting per-title signal breakdowns. Case study writeup of methodology and findings for the portfolio.
