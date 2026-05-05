@@ -83,6 +83,19 @@ def _fetch_page(slug: str, client: httpx.Client) -> str | None:
     return response.text
 
 
+_CDATA_WRAPPER = re.compile(r"/\*\s*(<!\[CDATA\[|\]\]>)\s*\*/")
+
+
+def _strip_cdata_wrapper(raw: str) -> str:
+    """Remove `/* <![CDATA[ */ ... /* ]]> */` wrappers from a script body.
+
+    Letterboxd serves its JSON-LD blocks wrapped in HTML CDATA comments — a
+    legacy XHTML convenience — which makes the body invalid JSON until the
+    wrappers are stripped.
+    """
+    return _CDATA_WRAPPER.sub("", raw).strip()
+
+
 def parse_rating(html: str) -> float | None:
     """Extract the Letterboxd weighted-average rating (0-5) from a film page.
 
@@ -97,8 +110,9 @@ def parse_rating(html: str) -> float | None:
     soup = BeautifulSoup(html, "lxml")
 
     for script in soup.find_all("script", type="application/ld+json"):
+        body = _strip_cdata_wrapper(script.string or "")
         try:
-            data = json.loads(script.string or "")
+            data = json.loads(body)
         except (json.JSONDecodeError, TypeError):
             continue
         candidates = data if isinstance(data, list) else [data]

@@ -69,6 +69,23 @@ def test_parse_rating_from_json_ld_array() -> None:
     assert parse_rating(html) == 3.8
 
 
+def test_parse_rating_strips_letterboxd_cdata_wrapper() -> None:
+    """Letterboxd wraps its JSON-LD in /* <![CDATA[ */ ... /* ]]> */ comments.
+
+    Without the wrapper-stripping helper, json.loads fails and the parser
+    silently falls through to the twitter:data2 fallback — which works, but
+    leaves us one Letterboxd template change away from a regression.
+    """
+    html = """
+    <script type="application/ld+json">
+    /* <![CDATA[ */
+    {"@type": "Movie", "aggregateRating": {"ratingValue": "4.59"}}
+    /* ]]> */
+    </script>
+    """
+    assert parse_rating(html) == 4.59
+
+
 # --- rating parsing — fallbacks ---------------------------------------------
 
 
