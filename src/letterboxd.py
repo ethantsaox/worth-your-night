@@ -6,11 +6,17 @@ film page for the aggregate weighted rating. Pages are cached to disk under
 
 Lookup strategy:
     1. Derive a slug from the title (e.g. "The Godfather" -> "the-godfather").
-    2. Try `/film/<slug>/`. If found, parse rating.
-    3. If 404 or rating not parseable, retry with `<slug>-<year>` for
-       disambiguation (e.g. "joker-2019" vs the older Joker films).
-    4. If still no rating, return `letterboxd_found=False` so the row becomes
-       UNSCORED downstream.
+    2. Try `/film/<slug>-<year>/` FIRST — year-disambiguated URLs are
+       unambiguous when they exist (e.g. /film/parasite-2019/ for the Bong
+       Joon-ho film, /film/cats-2019/ for the Tom Hooper musical).
+    3. If that 404s, fall back to `/film/<slug>/` — the canonical URL for
+       films without title collisions.
+    4. If neither yields a parseable rating, return `letterboxd_found=False`
+       so the row becomes UNSCORED downstream.
+
+    Note: trying the bare slug first is unsafe — it often returns an *older*
+    film sharing the title (e.g. /film/parasite/ is a 1982 horror film, not
+    Bong's 2019 film), which the parser will happily extract a rating from.
 
 Rating is returned on Letterboxd's native 0-5 scale; the scorer normalizes.
 """
@@ -140,7 +146,7 @@ def fetch_letterboxd(
     single bad title. Pages are cached under cache/letterboxd/<slug>.html.
     """
     base_slug = title_to_slug(title)
-    candidates = [base_slug, f"{base_slug}-{year}"]
+    candidates = [f"{base_slug}-{year}", base_slug]
 
     record: dict[str, Any] = {
         "title": title,
