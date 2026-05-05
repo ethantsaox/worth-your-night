@@ -68,23 +68,29 @@ pytest
 - **Vote count rewards age.** Older films accumulate more votes; recent releases will look thinner on the votes axis even if they're great.
 - **Single critic source.** Metacritic alone misses trade-publication signal (THR / Variety / IndieWire), which Phase 2 adds.
 - **Tier cutoffs are unvalidated.** 70/50 are intuition, not optimization. Phase 3 fits these against a labeled set.
+- **OMDb's Metacritic coverage is incomplete for older catalog films.** — Schindler's List (1993) returned no Metacritic value in our 50-title test set.
+- **In our 50-title test set, the v0.1 formula classified 37/50 (74%) as WORTH** — calibration is too lenient for mid-tier mainstream films, which the IMDb rating + vote-count terms over-reward. Tier cutoffs and weights are explicitly out of scope for Phase 1; Phase 3 will fit them against ground-truth labels.
+
+
 
 ## Sample output (top 10)
 
-> _Placeholder — fill in after the first real run._
+From a 50-title run on 2026-05-05.
 
 | Rank | Title | Year | Score | Tier |
 |---|---|---|---|---|
-| 1 |  |  |  |  |
-| 2 |  |  |  |  |
-| 3 |  |  |  |  |
-| 4 |  |  |  |  |
-| 5 |  |  |  |  |
-| 6 |  |  |  |  |
-| 7 |  |  |  |  |
-| 8 |  |  |  |  |
-| 9 |  |  |  |  |
-| 10 |  |  |  |  |
+| 1 | The Godfather | 1972 | 96.80 | WORTH |
+| 2 | Pulp Fiction | 1994 | 92.95 | WORTH |
+| 3 | Parasite | 2019 | 92.65 | WORTH |
+| 4 | The Lord of the Rings: The Fellowship of the Ring | 2001 | 92.00 | WORTH |
+| 5 | Goodfellas | 1990 | 91.20 | WORTH |
+| 6 | The Dark Knight | 2008 | 89.65 | WORTH |
+| 7 | There Will Be Blood | 2007 | 89.65 | WORTH |
+| 8 | La La Land | 2016 | 89.30 | WORTH |
+| 9 | No Country for Old Men | 2007 | 89.20 | WORTH |
+| 10 | Moonlight | 2016 | 89.15 | WORTH |
+
+Full tier distribution: **37 WORTH / 1 DECENT / 10 FILLER / 2 UNSCORED.**
 
 ## Project structure
 
