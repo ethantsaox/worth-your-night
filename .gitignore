@@ -1,0 +1,22 @@
+# Secrets
+.env
+
+# Virtual environments
+venv/
+.venv/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# macOS
+.DS_Store
+
+# Pipeline output (regeneratable)
+output/*.csv
+
+# Editor
+.vscode/
+.idea/
