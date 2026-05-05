@@ -1,8 +1,8 @@
-"""WYN Phase 1 orchestrator.
+"""WYN orchestrator.
 
-Reads data/titles.csv, fetches each title from OMDb, scores it with the
-v0.1 formula, and writes a sorted output/wyn_scores.csv. Prints progress,
-tier distribution, and a top-10 leaderboard to stdout.
+Reads data/titles.csv, fetches each title from OMDb and Letterboxd, scores
+with the v0.2 formula (MC 55% + Letterboxd 45%), writes a sorted
+output/wyn_scores.csv, and prints summary stats.
 
 Run from the project root:
     python src/main.py
@@ -13,19 +13,19 @@ import sys
 import time
 from pathlib import Path
 
+import httpx
 import pandas as pd
 
-# Allow `python src/main.py` to find the `src` package by adding the project
-# root to sys.path. Tests use the same import style (`from src.score ...`).
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.fetch import fetch_omdb  # noqa: E402
-from src.score import compute_score_v01  # noqa: E402
+from src.letterboxd import USER_AGENT, fetch_letterboxd  # noqa: E402
+from src.score import compute_score_v02  # noqa: E402
 
 TITLES_PATH = PROJECT_ROOT / "data" / "titles.csv"
 OUTPUT_PATH = PROJECT_ROOT / "output" / "wyn_scores.csv"
-SLEEP_BETWEEN_CALLS_SECONDS = 0.2
+SLEEP_BETWEEN_TITLES_SECONDS = 1.0  # respectful pacing for Letterboxd scraping
 
 
 def run() -> pd.DataFrame:
@@ -33,18 +33,26 @@ def run() -> pd.DataFrame:
     titles = pd.read_csv(TITLES_PATH)
     rows: list[dict] = []
 
-    for _, t in titles.iterrows():
-        title = str(t["title"])
-        year = int(t["year"])
-        print(f"Fetching: {title} ({year})")
-        fetched = fetch_omdb(title, year)
-        scored = compute_score_v01(fetched)
-        rows.append({**fetched, **scored})
-        time.sleep(SLEEP_BETWEEN_CALLS_SECONDS)
+    with httpx.Client(
+        timeout=15.0,
+        headers={"User-Agent": USER_AGENT},
+        follow_redirects=True,
+    ) as letterboxd_client:
+        for _, t in titles.iterrows():
+            title = str(t["title"])
+            year = int(t["year"])
+            print(f"Fetching: {title} ({year})")
+
+            omdb_data = fetch_omdb(title, year)
+            letterboxd_data = fetch_letterboxd(title, year, client=letterboxd_client)
+
+            merged = {**omdb_data, **letterboxd_data}
+            scored = compute_score_v02(merged)
+            rows.append({**merged, **scored})
+            time.sleep(SLEEP_BETWEEN_TITLES_SECONDS)
 
     df = pd.DataFrame(rows)
 
-    # Sort: scored rows first (by score desc), UNSCORED rows last.
     df["_unscored"] = df["tier"] == "UNSCORED"
     df["_sort_score"] = df["score"].fillna(-1.0)
     df = df.sort_values(

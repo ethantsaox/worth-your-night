@@ -17,6 +17,9 @@ __pycache__/
 # Pipeline output (regeneratable)
 output/*.csv
 
+# Letterboxd HTML cache (regeneratable; large)
+cache/
+
 # Editor
 .vscode/
 .idea/
