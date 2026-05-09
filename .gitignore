@@ -22,6 +22,12 @@ output/*.csv
 # Letterboxd HTML cache (regeneratable; large)
 cache/
 
+# SQLite database (regeneratable from CSV seed + cached HTML)
+wyn.db
+wyn.db-journal
+wyn.db-wal
+wyn.db-shm
+
 # Editor
 .vscode/
 .idea/
