@@ -75,7 +75,15 @@ pytest
 - **Letterboxd has no public ratings API on the free tier.** The scraper hits public film pages with respectful throttling (1 req/sec) and disk-caches responses. The parser tries JSON-LD `aggregateRating` first and falls back to `twitter:data2` — multiple strategies reduce but don't eliminate fragility to template changes.
 - **Slug-disambiguation pitfall.** Letterboxd's bare `/film/<slug>/` URL often points to an *older* film sharing the title rather than 404'ing (e.g. `/film/parasite/` → 1982 horror film, not Bong Joon-ho's 2019 film). The fetcher tries `/film/<slug>-<year>/` *first* and only falls back to the bare slug, so silent wrong-film matches are now blocked at the source.
 
+## Findings (v0.2)
 
+The headline result from Phase 2.1: **adding Letterboxd to the formula didn't change the tier distribution**. v0.1 (Metacritic + IMDb only) classified 37 of 50 titles as WORTH. v0.2 (Metacritic + Letterboxd) classified 38 of 50 as WORTH. Same shape, different films at the top of the leaderboard.
+
+The intuition behind v0.2 was that Letterboxd — a film-buff audience source weighted toward considered taste — would discriminate between prestige films and mid-tier crowdpleasers in a way that IMDb couldn't. **It didn't.** Letterboxd users love *John Wick*, *Knives Out*, and *Logan* about as much as Metacritic critics do, so a critic-plus-audience blend keeps mid-tier mainstream films firmly in WORTH.
+
+The implication for the rest of the project: a better audience source isn't enough. The signals that *should* discriminate are pedigree (does the director / lead cast have a track record of acclaimed films?) and trade-publication coverage (did THR / Variety / IndieWire bother reviewing it?). Both are on the roadmap as Phase 2.3 and 2.4. Phase 3 is where unvalidated tier cutoffs (70 / 50) get fit against a hand-labeled subset to confirm or reject this.
+
+The frozen v0.2 results table lives at [output/wyn_scores_v0.2.csv](output/wyn_scores_v0.2.csv) for inspection without re-running the pipeline.
 
 ## Sample output (top 10)
 

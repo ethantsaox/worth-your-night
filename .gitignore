@@ -16,6 +16,8 @@ __pycache__/
 
 # Pipeline output (regeneratable)
 output/*.csv
+# Frozen formula-version snapshots are committed as historical artifacts.
+!output/wyn_scores_v*.csv
 
 # Letterboxd HTML cache (regeneratable; large)
 cache/
