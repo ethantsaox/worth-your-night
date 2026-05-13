@@ -1,7 +1,7 @@
-"""Unit tests for the v0.1 and v0.2 WYN scoring formulas."""
+"""Unit tests for the v0.1, v0.2, and v0.3 WYN scoring formulas."""
 from __future__ import annotations
 
-from src.score import compute_score_v01, compute_score_v02
+from src.score import compute_score_v01, compute_score_v02, compute_score_v03
 
 
 def test_worth_tier_high_metacritic_and_imdb() -> None:
@@ -90,3 +90,48 @@ def test_v02_unscored_when_metacritic_missing() -> None:
     result = compute_score_v02(row)
     assert result["tier"] == "UNSCORED"
     assert "metacritic" in result["reason"]
+
+
+# --- v0.3 tests --------------------------------------------------------------
+
+
+def test_v03_worth_high_signals_across_all_three() -> None:
+    """Acclaimed critic + audience + director track record -> WORTH."""
+    row = {"metacritic": 95, "letterboxd_rating": 4.5, "pedigree_score": 85.0}
+    result = compute_score_v03(row)
+    # 95*0.41 + 90*0.35 + 85*0.24 = 38.95 + 31.5 + 20.4 = 90.85
+    assert result["tier"] == "WORTH"
+    assert result["score"] == 90.85
+
+
+def test_v03_decent_mid_signals() -> None:
+    row = {"metacritic": 60, "letterboxd_rating": 3.2, "pedigree_score": 55.0}
+    result = compute_score_v03(row)
+    # 60*0.41 + 64*0.35 + 55*0.24 = 24.6 + 22.4 + 13.2 = 60.2
+    assert result["tier"] == "DECENT"
+    assert 50 <= result["score"] < 70
+
+
+def test_v03_filler_low_signals() -> None:
+    row = {"metacritic": 20, "letterboxd_rating": 1.5, "pedigree_score": 30.0}
+    result = compute_score_v03(row)
+    # 20*0.41 + 30*0.35 + 30*0.24 = 8.2 + 10.5 + 7.2 = 25.9
+    assert result["tier"] == "FILLER"
+    assert result["score"] < 50
+
+
+def test_v03_unscored_when_pedigree_missing() -> None:
+    """First-time directors get pedigree=None -> UNSCORED, even with strong critic+audience."""
+    row = {"metacritic": 90, "letterboxd_rating": 4.5, "pedigree_score": None}
+    result = compute_score_v03(row)
+    assert result["tier"] == "UNSCORED"
+    assert "pedigree" in result["reason"]
+
+
+def test_v03_unscored_lists_all_missing_signals() -> None:
+    row = {"metacritic": None, "letterboxd_rating": None, "pedigree_score": None}
+    result = compute_score_v03(row)
+    assert result["tier"] == "UNSCORED"
+    assert "metacritic" in result["reason"]
+    assert "letterboxd" in result["reason"]
+    assert "pedigree" in result["reason"]

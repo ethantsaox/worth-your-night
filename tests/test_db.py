@@ -206,3 +206,94 @@ def test_export_includes_titles_with_no_signal_data(conn: sqlite3.Connection) ->
     assert len(out) == 1
     assert out.iloc[0]["title"] == "Untouched"
     assert pd.isna(out.iloc[0]["metacritic"])
+
+
+# --- directors / pedigree (Phase 2.3) ---------------------------------------
+
+
+def test_upsert_director_returns_id_and_is_idempotent(conn: sqlite3.Connection) -> None:
+    """A director can be re-upserted (e.g. to refresh tmdb_person_id) without duplicating."""
+    first_id = db.upsert_director(conn, "Bong Joon Ho", 21684)
+    second_id = db.upsert_director(conn, "Bong Joon Ho", 21684)
+    assert first_id == second_id
+
+    rows = list(conn.execute("SELECT name, tmdb_person_id FROM directors"))
+    assert len(rows) == 1
+    assert rows[0]["tmdb_person_id"] == 21684
+
+
+def test_upsert_director_handles_missing_tmdb_id(conn: sqlite3.Connection) -> None:
+    """When TMDB doesn't find the director, store the row anyway with NULL id
+    so we don't keep retrying the same lookup on every run."""
+    director_id = db.upsert_director(conn, "Obscure Filmmaker", None)
+    rows = list(conn.execute("SELECT name, tmdb_person_id FROM directors"))
+    assert len(rows) == 1
+    assert rows[0]["tmdb_person_id"] is None
+
+
+def test_director_films_roundtrip(conn: sqlite3.Connection) -> None:
+    director_id = db.upsert_director(conn, "Test Director", 1)
+    db.insert_director_films(
+        conn,
+        director_id,
+        [
+            {"film_title": "Film A", "film_year": 2010, "metacritic": 80},
+            {"film_title": "Film B", "film_year": 2015, "metacritic": None},
+            {"film_title": "Film C", "film_year": 2020, "metacritic": 65},
+        ],
+    )
+    films = db.get_director_films(conn, director_id)
+    # Ordered newest first.
+    assert [(f["film_title"], f["film_year"]) for f in films] == [
+        ("Film C", 2020),
+        ("Film B", 2015),
+        ("Film A", 2010),
+    ]
+
+
+def test_pedigree_roundtrip(conn: sqlite3.Connection) -> None:
+    db.seed_titles(conn, pd.DataFrame([{"title": "Parasite", "year": 2019}]))
+    title_id = db.all_titles(conn)[0]["id"]
+
+    db.upsert_pedigree_data(
+        conn,
+        title_id,
+        {"director_name": "Bong Joon Ho", "pedigree_score": 78.5, "prior_film_count": 5},
+    )
+    cached = db.get_pedigree_data(conn, title_id)
+    assert cached == {
+        "director_name": "Bong Joon Ho",
+        "pedigree_score": 78.5,
+        "prior_film_count": 5,
+    }
+
+
+def test_pedigree_roundtrip_with_none_score(conn: sqlite3.Connection) -> None:
+    """First-time directors store pedigree_score=NULL with film_count below threshold."""
+    db.seed_titles(conn, pd.DataFrame([{"title": "Debut", "year": 2020}]))
+    title_id = db.all_titles(conn)[0]["id"]
+
+    db.upsert_pedigree_data(
+        conn,
+        title_id,
+        {"director_name": "First Timer", "pedigree_score": None, "prior_film_count": 0},
+    )
+    cached = db.get_pedigree_data(conn, title_id)
+    assert cached["pedigree_score"] is None
+    assert cached["prior_film_count"] == 0
+
+
+def test_export_includes_pedigree_columns(conn: sqlite3.Connection) -> None:
+    db.seed_titles(conn, pd.DataFrame([{"title": "Parasite", "year": 2019}]))
+    title_id = db.all_titles(conn)[0]["id"]
+
+    db.upsert_pedigree_data(
+        conn,
+        title_id,
+        {"director_name": "Bong Joon Ho", "pedigree_score": 78.5, "prior_film_count": 5},
+    )
+    out = db.export_scores_df(conn, "v0.3")
+    assert "pedigree_score" in out.columns
+    assert "pedigree_director" in out.columns
+    assert "pedigree_prior_film_count" in out.columns
+    assert out.iloc[0]["pedigree_score"] == 78.5

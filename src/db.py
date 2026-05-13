@@ -13,6 +13,17 @@ Schema (all tables idempotent via CREATE TABLE IF NOT EXISTS):
     letterboxd_data    — one row per title (PK = title_id). slug + rating.
     scores             — one row per (title_id, formula_version). PK both.
 
+    -- Phase 2.3 (pedigree) additions:
+    directors          — one row per unique director name. Caches the TMDB
+                         person-id lookup so we don't re-search every run.
+    director_films     — one row per (director_id, film_title, film_year).
+                         Each entry caches the film's Metacritic score from
+                         OMDb so a director's full filmography is fetched
+                         once, scored many times.
+    pedigree_data      — one row per title_id. Stores the computed pedigree
+                         score (avg Metacritic of director's last 5 prior
+                         films) and the prior-film count, for explainability.
+
 The on-disk Letterboxd HTML cache (cache/letterboxd/*.html) is intentionally
 kept alongside the DB: it caches *raw input* for re-parsing if the parser
 improves, while the DB caches *structured output*. Different layers.
@@ -68,6 +79,30 @@ CREATE TABLE IF NOT EXISTS scores (
     reason TEXT,
     computed_at TEXT NOT NULL,
     PRIMARY KEY (title_id, formula_version)
+);
+
+CREATE TABLE IF NOT EXISTS directors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    tmdb_person_id INTEGER,
+    fetched_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS director_films (
+    director_id INTEGER NOT NULL REFERENCES directors(id),
+    film_title TEXT NOT NULL,
+    film_year INTEGER,
+    metacritic INTEGER,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (director_id, film_title, film_year)
+);
+
+CREATE TABLE IF NOT EXISTS pedigree_data (
+    title_id INTEGER PRIMARY KEY REFERENCES titles(id),
+    director_name TEXT,
+    pedigree_score REAL,
+    prior_film_count INTEGER NOT NULL,
+    computed_at TEXT NOT NULL
 );
 """
 
@@ -257,10 +292,9 @@ def export_scores_df(
 ) -> pd.DataFrame:
     """Return the final scored DataFrame for a given formula version.
 
-    Shape matches the Phase 2.1 CSV (so the on-disk artifact is unchanged):
-    columns include OMDb signal fields, Letterboxd signal fields, and final
-    score/tier/reason. UNSCORED rows are placed last; scored rows are sorted
-    by score descending.
+    Columns include OMDb signals, Letterboxd signals, pedigree fields (since
+    Phase 2.3), and final score/tier/reason. UNSCORED rows are placed last;
+    scored rows are sorted by score descending.
     """
     df = pd.read_sql_query(
         """
@@ -272,10 +306,14 @@ def export_scores_df(
             COALESCE(l.found, 0) AS letterboxd_found,
             l.slug AS letterboxd_slug,
             l.rating AS letterboxd_rating,
+            p.director_name AS pedigree_director,
+            p.pedigree_score,
+            p.prior_film_count AS pedigree_prior_film_count,
             s.score, s.tier, s.reason
         FROM titles t
         LEFT JOIN omdb_data o ON o.title_id = t.id
         LEFT JOIN letterboxd_data l ON l.title_id = t.id
+        LEFT JOIN pedigree_data p ON p.title_id = t.id
         LEFT JOIN scores s ON s.title_id = t.id AND s.formula_version = ?
         ORDER BY (s.tier = 'UNSCORED'), s.score DESC
         """,
@@ -285,3 +323,127 @@ def export_scores_df(
     df["found"] = df["found"].astype(bool)
     df["letterboxd_found"] = df["letterboxd_found"].astype(bool)
     return df
+
+
+# --- directors / pedigree (Phase 2.3) ----------------------------------------
+
+
+def get_director_id(conn: sqlite3.Connection, name: str) -> int | None:
+    """Return the directors row id for a given name, or None if not yet stored."""
+    row = conn.execute(
+        "SELECT id FROM directors WHERE name = ?", (name,)
+    ).fetchone()
+    return row["id"] if row else None
+
+
+def upsert_director(
+    conn: sqlite3.Connection, name: str, tmdb_person_id: int | None
+) -> int:
+    """Idempotently store (or update) a director and return their row id.
+
+    `tmdb_person_id` may be None when TMDB returned no match — the row still
+    gets inserted so we don't keep re-searching the same name.
+    """
+    conn.execute(
+        """
+        INSERT INTO directors (name, tmdb_person_id, fetched_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            tmdb_person_id = excluded.tmdb_person_id,
+            fetched_at = excluded.fetched_at
+        """,
+        (name, tmdb_person_id, _now_utc()),
+    )
+    conn.commit()
+    director_id = get_director_id(conn, name)
+    assert director_id is not None
+    return director_id
+
+
+def insert_director_films(
+    conn: sqlite3.Connection,
+    director_id: int,
+    films: list[dict[str, Any]],
+) -> None:
+    """Bulk-insert filmography rows. INSERT OR REPLACE so re-fetches refresh
+    Metacritic values without erroring on the composite primary key."""
+    rows = [
+        (
+            director_id,
+            f["film_title"],
+            f.get("film_year"),
+            f.get("metacritic"),
+            _now_utc(),
+        )
+        for f in films
+    ]
+    conn.executemany(
+        """
+        INSERT OR REPLACE INTO director_films
+            (director_id, film_title, film_year, metacritic, fetched_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+    conn.commit()
+
+
+def get_director_films(
+    conn: sqlite3.Connection, director_id: int
+) -> list[sqlite3.Row]:
+    """Return all cached films for a director, newest first."""
+    return list(
+        conn.execute(
+            """
+            SELECT film_title, film_year, metacritic
+            FROM director_films
+            WHERE director_id = ?
+            ORDER BY film_year DESC
+            """,
+            (director_id,),
+        )
+    )
+
+
+def get_pedigree_data(
+    conn: sqlite3.Connection, title_id: int
+) -> dict[str, Any] | None:
+    """Return the cached pedigree row for a title, or None."""
+    row = conn.execute(
+        """
+        SELECT director_name, pedigree_score, prior_film_count
+        FROM pedigree_data
+        WHERE title_id = ?
+        """,
+        (title_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "director_name": row["director_name"],
+        "pedigree_score": row["pedigree_score"],
+        "prior_film_count": row["prior_film_count"],
+    }
+
+
+def upsert_pedigree_data(
+    conn: sqlite3.Connection,
+    title_id: int,
+    data: dict[str, Any],
+) -> None:
+    """Insert or replace a pedigree_data row."""
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO pedigree_data
+            (title_id, director_name, pedigree_score, prior_film_count, computed_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            title_id,
+            data.get("director_name"),
+            data.get("pedigree_score"),
+            int(data.get("prior_film_count", 0)),
+            _now_utc(),
+        ),
+    )
+    conn.commit()
